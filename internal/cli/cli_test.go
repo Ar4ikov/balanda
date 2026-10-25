@@ -6,6 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/Ar4ikov/balanda/internal/voda"
+	"github.com/Ar4ikov/balanda/internal/vyvod"
 )
 
 func run(t *testing.T, stdin string, args ...string) (string, string, int) {
@@ -102,7 +106,7 @@ func TestProbaFile(t *testing.T) {
 
 func TestTravit(t *testing.T) {
 	out, _, code := run(t, "", "travit", "--tema", "db", "--zerno", "1")
-	if code != 0 || !strings.Contains(out, "байка про база") && !strings.Contains(out, "--tema db") {
+	if code != 0 || !strings.Contains(out, "тема: база") || !strings.Contains(out, "--tema db") {
 		t.Errorf("travit: код %d\n%s", code, out)
 	}
 	out, _, _ = run(t, "", "tell", "--spisok")
@@ -156,5 +160,22 @@ func TestKameraCmds(t *testing.T) {
 	_, errOut, code = run(t, "", "shmon", "5")
 	if code != 1 || !strings.Contains(errOut, "камеры 5 нет") {
 		t.Fatalf("shmon несуществующей: код %d, %q", code, errOut)
+	}
+}
+
+func TestHighlightWrap(t *testing.T) {
+	r := voda.Proba("Стоит отметить, что данный модуль работает. Второе предложение довольно длинное и обычное.\nНовая строка.")
+	got := highlight(vyvod.Palette{}, r, 30)
+	for _, line := range strings.Split(got, "\n") {
+		if n := utf8.RuneCountInString(line); n > 30 {
+			t.Errorf("строка длиннее 30: %q", line)
+		}
+	}
+	if strings.Join(strings.Fields(got), " ") != strings.Join(strings.Fields(r.Text), " ") {
+		t.Errorf("перенос изменил текст:\n%s", got)
+	}
+	colored := highlight(vyvod.Palette{Red: "<r>", Yellow: "<y>", Underline: "", Reset: "</>"}, r, 0)
+	if !strings.Contains(colored, "<r>Стоит</> <r>отметить</>") || !strings.Contains(colored, "<y>данный</>") {
+		t.Errorf("подсветка: %s", colored)
 	}
 }

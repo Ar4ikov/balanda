@@ -67,7 +67,7 @@ func newTravitCmd() *cobra.Command {
 				width = min(vyvod.Width(80), 80)
 			}
 			fmt.Fprintln(out, voda.Wrap(b.Text, width))
-			fmt.Fprintf(out, "%s— байка про %s, ещё: balanda travit --tema %s%s\n", p.Dim, b.Title, b.Tema, p.Reset)
+			fmt.Fprintf(out, "%s— тема: %s, ещё: balanda travit --tema %s%s\n", p.Dim, b.Title, b.Tema, p.Reset)
 			return nil
 		},
 	}

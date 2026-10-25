@@ -127,9 +127,11 @@ func newProbaCmd() *cobra.Command {
 				r := voda.Proba(text)
 				if !short {
 					if f, ok := out.(*os.File); ok && vyvod.IsTerminal(f) && !list {
-						fmt.Fprintln(out, highlight(p, r))
+						width := min(vyvod.Width(80), 100)
+						fmt.Fprintln(out, highlight(p, r, width))
 						fmt.Fprintln(out)
-						legend(out, p)
+						legend(out, p, width)
+						fmt.Fprintln(out)
 					} else {
 						findingsList(out, r)
 					}
@@ -187,27 +189,86 @@ func catColor(p vyvod.Palette, c voda.Category) string {
 
 var categories = []voda.Category{voda.CatShtamp, voda.CatKancelyarit, voda.CatOcenka, voda.CatZhargon, voda.CatCepochka}
 
-func highlight(p vyvod.Palette, r *voda.Report) string {
-	var b strings.Builder
-	pos := 0
-	for _, f := range r.Findings {
-		if f.Start < pos {
-			continue
+// highlight печатает текст с подсветкой находок и переносит строки
+// по словам, чтобы терминал не резал слова посередине.
+func highlight(p vyvod.Palette, r *voda.Report, width int) string {
+	// paint красит кусок текста [start, end) по находкам.
+	paint := func(start, end int) string {
+		var b strings.Builder
+		pos := start
+		for _, f := range r.Findings {
+			if f.End <= pos || f.Start >= end {
+				continue
+			}
+			from, to := max(f.Start, pos), min(f.End, end)
+			b.WriteString(r.Text[pos:from])
+			b.WriteString(catColor(p, f.Cat) + p.Underline + r.Text[from:to] + p.Reset)
+			pos = to
 		}
-		b.WriteString(r.Text[pos:f.Start])
-		b.WriteString(catColor(p, f.Cat) + p.Underline + r.Text[f.Start:f.End] + p.Reset)
-		pos = f.End
+		b.WriteString(r.Text[pos:end])
+		return b.String()
 	}
-	b.WriteString(r.Text[pos:])
-	return strings.TrimRight(b.String(), "\n")
+	var b strings.Builder
+	offset := 0
+	for i, line := range strings.Split(strings.TrimRight(r.Text, "\n"), "\n") {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		col := 0
+		for _, w := range wordSpans(line) {
+			n := utf8.RuneCountInString(line[w[0]:w[1]])
+			if col > 0 && width > 0 && col+1+n > width {
+				b.WriteByte('\n')
+				col = 0
+			} else if col > 0 {
+				b.WriteByte(' ')
+				col++
+			}
+			b.WriteString(paint(offset+w[0], offset+w[1]))
+			col += n
+		}
+		offset += len(line) + 1
+	}
+	return b.String()
 }
 
-func legend(out io.Writer, p vyvod.Palette) {
-	var parts []string
-	for _, c := range categories {
-		parts = append(parts, catColor(p, c)+p.Underline+c.Title()+p.Reset)
+// wordSpans — границы слов (кусков без пробелов) в строке.
+func wordSpans(line string) [][2]int {
+	var spans [][2]int
+	start := -1
+	for i, r := range line {
+		if r == ' ' || r == '\t' || r == '\r' {
+			if start >= 0 {
+				spans = append(spans, [2]int{start, i})
+				start = -1
+			}
+			continue
+		}
+		if start < 0 {
+			start = i
+		}
 	}
-	fmt.Fprintln(out, strings.Join(parts, "  "))
+	if start >= 0 {
+		spans = append(spans, [2]int{start, len(line)})
+	}
+	return spans
+}
+
+func legend(out io.Writer, p vyvod.Palette, width int) {
+	col := 0
+	for _, c := range categories {
+		n := utf8.RuneCountInString(c.Title())
+		if col > 0 && col+2+n > width {
+			fmt.Fprintln(out)
+			col = 0
+		} else if col > 0 {
+			fmt.Fprint(out, "  ")
+			col += 2
+		}
+		fmt.Fprint(out, catColor(p, c)+p.Underline+c.Title()+p.Reset)
+		col += n
+	}
+	fmt.Fprintln(out)
 }
 
 func findingsList(out io.Writer, r *voda.Report) {
