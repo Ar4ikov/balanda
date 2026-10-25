@@ -312,8 +312,9 @@ func killEngineRest(k *Kamera) {
 	}
 }
 
-// watchMemory на Linux не нужен: память держат cgroup или RLIMIT_AS.
-func watchMemory(*Kamera, func()) func() { return func() {} }
+// watchLimits на Linux не нужен: лимиты держат cgroup или rlimit,
+// а на жёстком RLIMIT_CPU ядро шлёт SIGKILL.
+func watchLimits(*Kamera, func(string)) func() { return func() {} }
 
 // procStat — нужные поля из /proc/<pid>/stat.
 type procStat struct {

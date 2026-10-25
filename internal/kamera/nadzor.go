@@ -245,8 +245,8 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 			eng.kill(true)
 		})
 	}
-	stopWatch := watchMemory(k, func() {
-		setReason(ReasonMem)
+	stopWatch := watchLimits(k, func(reason string) {
+		setReason(reason)
 		eng.kill(false)
 	})
 	stopSignals := forwardSignals(eng, fg)

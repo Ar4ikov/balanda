@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -269,6 +270,9 @@ func rlimitWarnings(p Paika) []string {
 	}
 	if p.Mem > 0 && !useRlimitAS {
 		w = append(w, "память проверяется сторожем раз в 0,5 с: короткий всплеск успеет пройти")
+	}
+	if p.CPUSeconds() > 0 && runtime.GOOS == "darwin" {
+		w = append(w, "процессорное время сверх лимита гасит сторож, проверка раз в 0,5 с")
 	}
 	return w
 }

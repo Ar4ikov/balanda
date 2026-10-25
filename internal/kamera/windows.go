@@ -296,7 +296,7 @@ func runZek([]string) int {
 	return ExitNoStart
 }
 
-func watchMemory(*Kamera, func()) func() { return func() {} }
+func watchLimits(*Kamera, func(string)) func() { return func() {} }
 
 // Alive проверяет, жив ли процесс, и при нужде сверяет время старта.
 func Alive(pid int, start uint64) bool {

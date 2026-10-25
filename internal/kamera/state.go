@@ -84,7 +84,7 @@ func EngineTitle(e string) string {
 		return "cgroups v2"
 	case EngineRlimit:
 		if runtime.GOOS == "darwin" {
-			return "rlimit + сторож памяти"
+			return "rlimit и сторож"
 		}
 		return "rlimit"
 	case EngineJob:

@@ -47,10 +47,18 @@ func EngineFor() (string, string) {
 
 func killEngineRest(*Kamera) {}
 
-// watchMemory раз в полсекунды суммирует RSS группы и гасит камеру,
-// если сумма выше лимита. Нужен там, где RLIMIT_AS не работает.
-func watchMemory(k *Kamera, onExceed func()) func() {
-	if useRlimitAS || k.Paika.Mem <= 0 {
+// watchLimits раз в полсекунды суммирует RSS и процессорное время
+// группы и гасит камеру, если сумма вышла за пайку. Память сторож
+// держит там, где RLIMIT_AS не работает (macOS, OpenBSD). Процессорное
+// время — везде: macOS не добивает SIGKILL процесс, который игнорирует
+// SIGXCPU (так делают, например, программы на Go).
+func watchLimits(k *Kamera, onExceed func(reason string)) func() {
+	memLimit := k.Paika.Mem
+	if useRlimitAS {
+		memLimit = 0
+	}
+	cpuLimit := time.Duration(k.Paika.CPUSeconds()) * time.Second
+	if memLimit <= 0 && cpuLimit <= 0 {
 		return func() {}
 	}
 	done := make(chan struct{})
@@ -66,12 +74,18 @@ func watchMemory(k *Kamera, onExceed func()) func() {
 				if err != nil {
 					continue
 				}
-				var sum int64
+				var rss int64
+				var cpu time.Duration
 				for _, p := range procs {
-					sum += p.rss
+					rss += p.rss
+					cpu += p.cpu
 				}
-				if sum > k.Paika.Mem {
-					onExceed()
+				switch {
+				case memLimit > 0 && rss > memLimit:
+					onExceed(ReasonMem)
+					return
+				case cpuLimit > 0 && cpu > cpuLimit:
+					onExceed(ReasonCPU)
 					return
 				}
 			}
