@@ -15,5 +15,5 @@ func main() {
 	if code, ok := kamera.Dispatch(os.Args); ok {
 		os.Exit(code)
 	}
-	os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
+	os.Exit(cli.Execute(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }

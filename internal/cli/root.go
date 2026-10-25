@@ -33,6 +33,8 @@ func (e *ExitError) Error() string { return fmt.Sprintf("код выхода %d"
 
 // NewRoot собирает дерево команд.
 func NewRoot() *cobra.Command {
+	// Команды в справке идут в порядке добавления, а не по алфавиту.
+	cobra.EnableCommandSorting = false
 	root := &cobra.Command{
 		Use:   "balanda [команда]",
 		Short: "песочница, уборка, вода и байки в одном бинарнике",
@@ -46,7 +48,9 @@ func NewRoot() *cobra.Command {
 		SilenceErrors:         true,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
-		DisableSuggestions:    true,
+		// Подсказки печатаем сами, по-русски.
+		DisableSuggestions:         true,
+		SuggestionsMinimumDistance: 2,
 	}
 	root.CompletionOptions.HiddenDefaultCmd = true
 
@@ -121,9 +125,10 @@ func newHelpCmd() *cobra.Command {
 }
 
 // Execute запускает CLI и возвращает код выхода.
-func Execute(args []string, stdout, stderr io.Writer) int {
+func Execute(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	root := NewRoot()
 	root.SetArgs(args)
+	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	err := root.Execute()
