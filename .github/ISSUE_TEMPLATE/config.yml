@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Установка
+    url: https://github.com/Ar4ikov/balanda#установка
+    about: Команды установки для Linux, macOS и Windows
