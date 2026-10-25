@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: go.mod и go.sum в порядке
+        if: runner.os == 'Linux'
+        run: go mod tidy -diff
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15
+
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+      # Под root на ubuntu cgroups v2 доступны, так проверяется движок,
+      # который у обычного пользователя включается только при делегированной cgroup.
+      - name: песочница на cgroups v2 (root)
+        if: runner.os == 'Linux'
+        run: |
+          go test -c -o "$RUNNER_TEMP/kamera.test" ./internal/kamera
+          sudo env BALANDA_ENGINE=cgroup2 "$RUNNER_TEMP/kamera.test" -test.v -test.count=1 \
+            -test.run 'TestCgroup|TestSadit|TestBackground'
+
+  goreleaser:
+    name: goreleaser snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: goreleaser check
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: check
+
+      - name: goreleaser release --snapshot
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean
+
+      - name: все цели собраны
+        run: |
+          for f in balanda_linux_amd64.tar.gz balanda_linux_arm64.tar.gz \
+                   balanda_darwin_amd64.tar.gz balanda_darwin_arm64.tar.gz \
+                   balanda_windows_amd64.zip balanda_windows_arm64.zip checksums.txt; do
+            test -f "dist/$f" || { echo "нет dist/$f"; exit 1; }
+          done
+          for ext in deb rpm apk; do
+            test "$(ls dist/*."$ext" | wc -l)" -eq 2 || { echo "нет пакетов .$ext"; exit 1; }
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: snapshot
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/checksums.txt
+          retention-days: 4
+          if-no-files-found: error
+
+  install:
+    name: install (${{ matrix.os }})
+    needs: goreleaser
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: snapshot
+          path: snapshot
+
+      - name: install.sh из snapshot
+        if: runner.os != 'Windows'
+        env:
+          BALANDA_LOCAL_DIR: snapshot
+        run: |
+          sh install.sh
+          "$HOME/.local/bin/balanda" version
+          "$HOME/.local/bin/balanda" travit
+
+      - name: install.sh отказывает при неверной контрольной сумме
+        if: runner.os != 'Windows'
+        run: |
+          mkdir bad
+          cp snapshot/*.tar.gz bad/
+          awk '{print "0000000000000000000000000000000000000000000000000000000000000000", $2}' \
+            snapshot/checksums.txt > bad/checksums.txt
+          if BALANDA_LOCAL_DIR=bad BALANDA_INSTALL_DIR="$RUNNER_TEMP/bad" sh install.sh; then
+            echo "скрипт поставил архив с чужой контрольной суммой"; exit 1
+          fi
+
+      - name: пакет .deb
+        if: runner.os == 'Linux'
+        run: |
+          sudo dpkg -i snapshot/balanda_*_amd64.deb
+          /usr/bin/balanda version
+
+      - name: install.ps1 из snapshot (как irm | iex)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:BALANDA_LOCAL_DIR = "$PWD\snapshot"
+          Get-Content -Raw -Encoding UTF8 install.ps1 | Invoke-Expression
+          & "$env:LOCALAPPDATA\Programs\balanda\balanda.exe" version
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (-not ($userPath -like "*Programs\balanda*")) { throw "каталог не попал в пользовательский PATH" }
+
+      - name: install.ps1 под Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:BALANDA_LOCAL_DIR = "$PWD\snapshot"
+          $env:BALANDA_INSTALL_DIR = "$env:RUNNER_TEMP\ps51"
+          Get-Content -Raw -Encoding UTF8 install.ps1 | Invoke-Expression
+          & "$env:RUNNER_TEMP\ps51\balanda.exe" version

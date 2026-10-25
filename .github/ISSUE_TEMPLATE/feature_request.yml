@@ -1,0 +1,35 @@
+name: Предложение
+description: Новая возможность или изменение поведения
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: part
+    attributes:
+      label: Часть balanda
+      options:
+        - камера (sadit, pereklichka, shmon, otboy)
+        - объедки (scan, svarit)
+        - вода (nalit, proba)
+        - байки (travit)
+        - установка и релизы
+        - другое
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу это решит
+      description: Что вы делаете сейчас и где неудобно.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Как это могло бы выглядеть
+      description: Команда, флаг, пример вывода.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Какие варианты уже пробовали

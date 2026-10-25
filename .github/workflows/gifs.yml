@@ -1,0 +1,87 @@
+name: GIF
+
+# Перезаписывает GIF в docs/gifs по tape-файлам из docs/tapes.
+# Зацикливания нет: каталог docs/gifs не входит в paths, а коммит от
+# GITHUB_TOKEN другие workflow не запускает.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/tapes/**"
+      - "**.go"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/gifs.yml"
+  pull_request:
+    paths:
+      - "docs/tapes/**"
+      - "**.go"
+      - "internal/**"
+      - ".github/workflows/gifs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gifs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gifs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: собрать balanda
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          go build -o "$RUNNER_TEMP/bin/balanda" .
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: поставить VHS
+        uses: charmbracelet/vhs-action@v2
+
+      - name: записать GIF
+        run: |
+          for tape in docs/tapes/*.tape; do
+            echo "== $tape"
+            vhs "$tape"
+          done
+          ls -la docs/gifs
+
+      - name: размер GIF не больше 2 МБ
+        run: |
+          for gif in docs/gifs/*.gif; do
+            size=$(stat -c %s "$gif")
+            echo "$gif: $size байт"
+            if [ "$size" -gt 2097152 ]; then echo "$gif больше 2 МБ"; exit 1; fi
+          done
+
+      - name: GIF для просмотра в PR
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gifs
+          path: docs/gifs/*.gif
+          retention-days: 3
+
+      - name: закоммитить GIF
+        if: github.event_name != 'pull_request'
+        run: |
+          git add docs/gifs
+          if git diff --cached --quiet; then
+            echo "GIF не изменились"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: перезаписаны GIF"
+          git push

@@ -1,0 +1,81 @@
+# Документация: https://goreleaser.com
+version: 2
+project_name: balanda
+
+before:
+  hooks:
+    - sh scripts/completions.sh
+
+builds:
+  - id: balanda
+    main: .
+    binary: balanda
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/Ar4ikov/balanda/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/Ar4ikov/balanda/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/Ar4ikov/balanda/internal/buildinfo.Date={{ .CommitDate }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: balanda
+    # Имя без версии: install.sh качает releases/latest/download/<имя>
+    # и не ходит в API за номером последнего релиза.
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+      - completions/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+nfpms:
+  - id: packages
+    package_name: balanda
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Ar4ikov
+    homepage: https://github.com/Ar4ikov/balanda
+    maintainer: Ar4ikov <20085792+Ar4ikov@users.noreply.github.com>
+    description: Песочница для команд, уборка мусора сборок, генератор канцелярской воды и айтишные байки в терминале.
+    license: MIT
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+    section: utils
+    contents:
+      - src: ./completions/balanda.bash
+        dst: /usr/share/bash-completion/completions/balanda
+      - src: ./completions/balanda.zsh
+        dst: /usr/share/zsh/vendor-completions/_balanda
+      - src: ./completions/balanda.fish
+        dst: /usr/share/fish/vendor_completions.d/balanda.fish
+      - src: ./LICENSE
+        dst: /usr/share/doc/balanda/copyright
+      - src: ./internal/voda/LICENSE-avoid-ai-writing-russian
+        dst: /usr/share/doc/balanda/LICENSE-avoid-ai-writing-russian
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+# Заметки к релизу пишет release-please, GoReleaser их не трогает
+# и только догружает файлы в уже созданный релиз.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: Ar4ikov
+    name: balanda
+  mode: keep-existing
+  replace_existing_artifacts: true
