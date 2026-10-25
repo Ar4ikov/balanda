@@ -1,0 +1,74 @@
+name: Cleanup
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # понедельник, 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Сколько дней хранить артефакты и кэши
+        default: "7"
+      keep_runs:
+        description: Сколько последних прогонов оставить у каждого workflow
+        default: "20"
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      DAYS: ${{ inputs.days || '7' }}
+      KEEP_RUNS: ${{ inputs.keep_runs || '20' }}
+    steps:
+      - name: артефакты старше N дней
+        run: |
+          cutoff=$(date -u -d "-${DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
+          n=0
+          for id in $(gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.created_at < \"$cutoff\") | .id"); do
+            gh api -X DELETE "repos/$REPO/actions/artifacts/$id" && n=$((n + 1))
+          done
+          echo "удалено артефактов: $n" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: кэши старше N дней и от удалённых веток
+        run: |
+          cutoff=$(date -u -d "-${DAYS} days" +%Y-%m-%dT%H:%M:%SZ)
+          branches=$(gh api --paginate "repos/$REPO/branches?per_page=100" --jq '.[].name')
+          n=0
+          gh api --paginate "repos/$REPO/actions/caches?per_page=100" \
+              --jq '.actions_caches[] | [.id, .ref, .last_accessed_at] | @tsv' > caches.tsv
+          while IFS="$(printf '\t')" read -r id ref last; do
+            drop=""
+            if [ "$last" \< "$cutoff" ]; then
+              drop="старше $DAYS дней"
+            else
+              case "$ref" in
+                refs/heads/*)
+                  if ! printf '%s\n' "$branches" | grep -qx "${ref#refs/heads/}"; then drop="ветки нет"; fi ;;
+                refs/pull/*/merge)
+                  pr=${ref#refs/pull/}; pr=${pr%/merge}
+                  if [ "$(gh api "repos/$REPO/pulls/$pr" --jq .state)" = closed ]; then drop="PR закрыт"; fi ;;
+              esac
+            fi
+            if [ -n "$drop" ]; then
+              gh api -X DELETE "repos/$REPO/actions/caches/$id" && n=$((n + 1)) && echo "$ref: $drop"
+            fi
+          done < caches.tsv
+          echo "удалено кэшей: $n" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: старые прогоны, последние N остаются
+        run: |
+          n=0
+          for wf in $(gh api --paginate "repos/$REPO/actions/workflows?per_page=100" --jq '.workflows[].id'); do
+            for id in $(gh api --paginate "repos/$REPO/actions/workflows/$wf/runs?per_page=100&status=completed" \
+                --jq '.workflow_runs[].id' | tail -n +"$((KEEP_RUNS + 1))"); do
+              gh api -X DELETE "repos/$REPO/actions/runs/$id" && n=$((n + 1))
+            done
+          done
+          echo "удалено прогонов: $n" | tee -a "$GITHUB_STEP_SUMMARY"
