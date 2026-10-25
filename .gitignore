@@ -1,0 +1,6 @@
+/dist/
+/completions/
+/balanda
+/balanda.exe
+*.test
+*.out
