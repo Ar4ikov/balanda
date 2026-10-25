@@ -169,7 +169,7 @@ func resumeProcess(pid uint32) error {
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(snap)
+	defer closeHandle(snap)
 	var te windows.ThreadEntry32
 	te.Size = uint32(unsafe.Sizeof(te))
 	resumed := 0
@@ -232,6 +232,8 @@ func (e *jobEngine) finish(ps *os.ProcessState) (*Usage, string) {
 	}
 	return u, reason
 }
+
+func closeHandle(h windows.Handle) { _ = windows.CloseHandle(h) }
 
 func openJob(name string, access uint32) (windows.Handle, error) {
 	n, err := windows.UTF16PtrFromString(name)
@@ -305,7 +307,7 @@ func Alive(pid int, start uint64) bool {
 	if err != nil {
 		return false
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandle(h)
 	var code uint32
 	if err := windows.GetExitCodeProcess(h, &code); err != nil || code != stillActive {
 		return false
@@ -331,7 +333,7 @@ func procStart(pid int) uint64 {
 	if err != nil {
 		return 0
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandle(h)
 	return startOf(h)
 }
 
@@ -339,7 +341,7 @@ func procStart(pid int) uint64 {
 func killKamera(k *Kamera, _ bool) error {
 	if k.EngineInfo != "" {
 		if job, err := openJob(k.EngineInfo, jobObjectTerminate); err == nil {
-			defer windows.CloseHandle(job)
+			defer closeHandle(job)
 			return windows.TerminateJobObject(job, 1)
 		}
 	}
@@ -350,7 +352,7 @@ func killKamera(k *Kamera, _ bool) error {
 	if err != nil {
 		return err
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandle(h)
 	return windows.TerminateProcess(h, 1)
 }
 
@@ -360,7 +362,7 @@ func processNames() map[uint32]string {
 	if err != nil {
 		return names
 	}
-	defer windows.CloseHandle(snap)
+	defer closeHandle(snap)
 	var pe windows.ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
 	for err = windows.Process32First(snap, &pe); err == nil; err = windows.Process32Next(snap, &pe) {
@@ -374,7 +376,7 @@ func procMemAndHandles(pid uint32) (int64, int) {
 	if err != nil {
 		return -1, 0
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandle(h)
 	var mc memCounters
 	mc.CB = uint32(unsafe.Sizeof(mc))
 	mem := int64(-1)
@@ -396,7 +398,7 @@ func liveStats(k *Kamera) (*Stats, error) {
 	s := &Stats{Mem: 0, PeakMem: -1, Source: "Job Object"}
 	pids := []uint32{uint32(k.PID)}
 	if job, err := openJob(k.EngineInfo, jobObjectQuery); err == nil {
-		defer windows.CloseHandle(job)
+		defer closeHandle(job)
 		var acc basicAccounting
 		if windows.QueryInformationJobObject(job, windows.JobObjectBasicAccountingInformation,
 			uintptr(unsafe.Pointer(&acc)), uint32(unsafe.Sizeof(acc)), nil) == nil {

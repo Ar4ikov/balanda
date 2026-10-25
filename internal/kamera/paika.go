@@ -118,7 +118,7 @@ func ParsePaika(s string) (Paika, error) {
 
 func parseMem(val string) (int64, error) {
 	v := strings.ToLower(strings.TrimSpace(val))
-	i := strings.IndexFunc(v, func(r rune) bool { return !(unicode.IsDigit(r) || r == '.') })
+	i := strings.IndexFunc(v, func(r rune) bool { return !unicode.IsDigit(r) && r != '.' })
 	num, suf := v, ""
 	if i >= 0 {
 		num, suf = v[:i], strings.TrimSpace(v[i:])

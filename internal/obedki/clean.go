@@ -71,7 +71,7 @@ func check(root string, it Item, o CleanOptions, known map[string]bool) error {
 	switch it.Kind {
 	case KindDocker:
 		if !o.Docker {
-			return errors.New("Docker-образы чистятся только с --docker")
+			return errors.New("образы Docker чистятся только с --docker")
 		}
 		return nil
 	case KindToolCache:
@@ -137,7 +137,7 @@ func runTool(ctx context.Context, name string, args ...string) error {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s: %v: %s", name, err, firstLine(string(out)))
+		return fmt.Errorf("%s: %w: %s", name, err, firstLine(string(out)))
 	}
 	return nil
 }

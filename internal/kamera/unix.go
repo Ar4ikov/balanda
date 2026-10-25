@@ -254,9 +254,9 @@ func rusage(ps *os.ProcessState) *Usage {
 		return nil
 	}
 	return &Usage{
-		UserMs:  ru.Utime.Sec*1000 + int64(ru.Utime.Usec)/1000,
-		SysMs:   ru.Stime.Sec*1000 + int64(ru.Stime.Usec)/1000,
-		PeakMem: int64(ru.Maxrss) * maxrssUnit,
+		UserMs:  ru.Utime.Nano() / 1e6,
+		SysMs:   ru.Stime.Nano() / 1e6,
+		PeakMem: ru.Maxrss * maxrssUnit,
 	}
 }
 
