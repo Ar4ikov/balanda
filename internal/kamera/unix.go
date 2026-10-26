@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"syscall"
@@ -186,30 +187,64 @@ type groupEngine struct {
 	pid    int
 	limits bool
 	p      Paika
+	iz     Izolyaciya
+	dir    string
+	tmp    string
 }
 
 func (g *groupEngine) pgid() int { return g.pid }
 
 func (g *groupEngine) prepare(cmd *exec.Cmd) error {
-	if !g.limits {
+	if !g.limits && !g.iz.On() {
 		return nil
 	}
+	o := zekOpts{}
+	if g.limits {
+		if g.p.Mem > 0 && useRlimitAS {
+			o.as = uint64(g.p.Mem)
+		}
+		o.cpu = g.p.CPUSeconds()
+	}
+	tmp, err := wrapZek(cmd, o, g.iz, g.dir)
+	g.tmp = tmp
+	return err
+}
+
+// wrapZek перезапускает команду через служебный __zek: он ставит rlimit
+// и, если изоляция включена, строит стены. Возвращает временный каталог
+// камеры, если он понадобился (на macOS), чтобы потом его удалить.
+func wrapZek(cmd *exec.Cmd, o zekOpts, iz Izolyaciya, dir string) (string, error) {
 	self, err := selfExe()
 	if err != nil {
-		return fmt.Errorf("не найти свой бинарник: %w", err)
+		return "", fmt.Errorf("не найти свой бинарник: %w", err)
 	}
-	args := []string{self, argZek}
-	if g.p.Mem > 0 && useRlimitAS {
-		args = append(args, "--as", strconv.FormatInt(g.p.Mem, 10))
+	o.path, o.argv = cmd.Path, cmd.Args
+	tmp := ""
+	if iz.On() {
+		if real, err := filepath.EvalSymlinks(dir); err == nil {
+			dir = real
+		}
+		o.odinochka = true
+		o.set = iz.Set
+		o.bezDoma = iz.BezDoma
+		o.dir = dir
+		o.zapis = iz.Zapis
+		if needOwnTmp {
+			if tmp, err = os.MkdirTemp("", "balanda-kamera-"); err != nil {
+				return "", err
+			}
+			if real, err := filepath.EvalSymlinks(tmp); err == nil {
+				tmp = real
+			}
+			o.tmp = tmp
+		}
+		if err := isolateCmd(cmd, iz); err != nil {
+			return tmp, err
+		}
 	}
-	if s := g.p.CPUSeconds(); s > 0 {
-		args = append(args, "--cpu", strconv.FormatUint(s, 10))
-	}
-	args = append(args, "--", cmd.Path)
-	args = append(args, cmd.Args...)
 	cmd.Path = self
-	cmd.Args = args
-	return nil
+	cmd.Args = append([]string{self, argZek}, o.args()...)
+	return tmp, nil
 }
 
 func (g *groupEngine) started(p *os.Process) error {
@@ -220,6 +255,10 @@ func (g *groupEngine) started(p *os.Process) error {
 func (g *groupEngine) kill(graceful bool) { killGroup(g.pid, graceful) }
 
 func (g *groupEngine) finish(ps *os.ProcessState) (*Usage, string) {
+	if g.tmp != "" {
+		_ = os.RemoveAll(g.tmp)
+		g.tmp = ""
+	}
 	if ps == nil {
 		return nil, ""
 	}
@@ -235,10 +274,18 @@ func (g *groupEngine) finish(ps *os.ProcessState) (*Usage, string) {
 func cpuReason(p Paika, ps *os.ProcessState, u *Usage) string {
 	secs := p.CPUSeconds()
 	ws, ok := ps.Sys().(syscall.WaitStatus)
-	if secs == 0 || !ok || !ws.Signaled() || u == nil {
+	if secs == 0 || !ok || u == nil {
 		return ""
 	}
-	switch ws.Signal() {
+	sig := syscall.Signal(-1)
+	switch {
+	case ws.Signaled():
+		sig = ws.Signal()
+	case ws.Exited() && ws.ExitStatus() > 128:
+		// В одиночке команду ждёт __zek и отдаёт её смерть кодом 128+сигнал.
+		sig = syscall.Signal(ws.ExitStatus() - 128)
+	}
+	switch sig {
 	case syscall.SIGXCPU:
 		return ReasonCPU
 	case syscall.SIGKILL:
@@ -277,59 +324,31 @@ func rlimitWarnings(p Paika) []string {
 	return w
 }
 
-// runZek — режим «__zek»: поставить rlimit самому себе и превратиться
-// в нужную команду через exec. PID при этом не меняется.
+// runZek — режим «__zek»: поставить rlimit самому себе, при изоляции
+// построить стены и запустить команду. PID снаружи тот же.
 func runZek(args []string) int {
-	var (
-		as, cpu uint64
-		rest    []string
-	)
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--as", "--cpu":
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "balanda: __zek: нет значения у", args[i])
-				return ExitNoStart
-			}
-			v, err := strconv.ParseUint(args[i+1], 10, 64)
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "balanda: __zek:", err)
-				return ExitNoStart
-			}
-			if args[i] == "--as" {
-				as = v
-			} else {
-				cpu = v
-			}
-			i++
-		case "--":
-			rest = args[i+1:]
-			i = len(args)
-		default:
-			fmt.Fprintln(os.Stderr, "balanda: __zek: непонятный аргумент", args[i])
-			return ExitNoStart
-		}
-	}
-	if len(rest) < 2 {
-		fmt.Fprintln(os.Stderr, "balanda: __zek: нет команды")
+	o, err := parseZek(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "balanda: __zek:", err)
 		return ExitNoStart
 	}
-	if as > 0 && rlimitAS >= 0 {
-		if err := setrlimit(rlimitAS, as, as); err != nil {
-			fmt.Fprintln(os.Stderr, "balanda: не поставить лимит памяти:", err)
-			return ExitNoStart
+	return zekRun(o)
+}
+
+// applyRlimits ставит лимиты памяти и процессорного времени.
+func applyRlimits(o zekOpts) error {
+	if o.as > 0 && rlimitAS >= 0 {
+		if err := setrlimit(rlimitAS, o.as, o.as); err != nil {
+			return fmt.Errorf("не поставить лимит памяти: %w", err)
 		}
 	}
-	if cpu > 0 {
+	if o.cpu > 0 {
 		// Мягкий лимит шлёт SIGXCPU, жёсткий на секунду позже — SIGKILL.
-		if err := setrlimit(unix.RLIMIT_CPU, cpu, cpu+1); err != nil {
-			fmt.Fprintln(os.Stderr, "balanda: не поставить лимит CPU:", err)
-			return ExitNoStart
+		if err := setrlimit(unix.RLIMIT_CPU, o.cpu, o.cpu+1); err != nil {
+			return fmt.Errorf("не поставить лимит CPU: %w", err)
 		}
 	}
-	err := syscall.Exec(rest[0], rest[1:], os.Environ())
-	fmt.Fprintf(os.Stderr, "balanda: не запустить %s: %v\n", rest[1], err)
-	return ExitNoStart
+	return nil
 }
 
 // setrlimit скрывает разницу в типах: на FreeBSD поля Rlimit — int64.

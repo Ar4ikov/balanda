@@ -19,6 +19,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// На Linux у камеры свой /tmp в tmpfs, отдельный каталог не нужен.
+const needOwnTmp = false
+
 const (
 	cgroupRoot = "/sys/fs/cgroup"
 	// На Linux ru_maxrss в килобайтах.
@@ -34,11 +37,11 @@ var clockTicks = int64(100) // sysconf(_SC_CLK_TCK) почти везде 100
 // BALANDA_ENGINE=rlimit или cgroup2 оставляет только один.
 func newEngines(k *Kamera) ([]engineMaker, error) {
 	none := func() (engine, string, string, error) {
-		return &groupEngine{}, EngineNone, "", nil
+		return &groupEngine{iz: k.Izolyaciya, dir: k.Dir}, EngineNone, "", nil
 	}
 	rl := func() (engine, string, string, error) {
 		k.Warnings = append(k.Warnings, rlimitWarnings(k.Paika)...)
-		return &groupEngine{limits: true, p: k.Paika}, EngineRlimit, "", nil
+		return &groupEngine{limits: true, p: k.Paika, iz: k.Izolyaciya, dir: k.Dir}, EngineRlimit, "", nil
 	}
 	cg := func() (engine, string, string, error) {
 		e, err := newCgroupEngine(k)
@@ -133,10 +136,12 @@ func usableParent(dir string) bool {
 }
 
 type cgroupEngine struct {
-	dir string
-	fd  *os.File
-	pid int
-	p   Paika
+	dir     string
+	fd      *os.File
+	pid     int
+	p       Paika
+	iz      Izolyaciya
+	workdir string
 }
 
 func newCgroupEngine(k *Kamera) (*cgroupEngine, error) {
@@ -148,7 +153,7 @@ func newCgroupEngine(k *Kamera) (*cgroupEngine, error) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("не создать cgroup: %w", err)
 	}
-	e := &cgroupEngine{dir: dir, p: k.Paika}
+	e := &cgroupEngine{dir: dir, p: k.Paika, iz: k.Izolyaciya, workdir: k.Dir}
 	fail := func(err error) (*cgroupEngine, error) {
 		_ = os.Remove(dir)
 		return nil, err
@@ -190,6 +195,11 @@ func (e *cgroupEngine) prepare(cmd *exec.Cmd) error {
 	}
 	cmd.SysProcAttr.UseCgroupFD = true
 	cmd.SysProcAttr.CgroupFD = int(f.Fd())
+	if e.iz.On() {
+		if _, err := wrapZek(cmd, zekOpts{}, e.iz, e.workdir); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

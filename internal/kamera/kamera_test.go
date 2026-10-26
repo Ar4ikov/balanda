@@ -3,6 +3,7 @@ package kamera
 import (
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"runtime"
@@ -26,6 +27,26 @@ func helper(mode string) int {
 	switch mode {
 	case "exit3":
 		return 3
+	case "write":
+		if err := os.WriteFile(os.Getenv("BALANDA_TEST_ARG"), []byte("x"), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	case "read":
+		if _, err := os.ReadFile(os.Getenv("BALANDA_TEST_ARG")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	case "dial":
+		c, err := net.DialTimeout("tcp", "1.1.1.1:53", 3*time.Second)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		c.Close()
+		return 0
 	case "sleep":
 		time.Sleep(30 * time.Second)
 		return 0

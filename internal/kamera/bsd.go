@@ -31,12 +31,12 @@ var maxrssUnit = func() int64 {
 func newEngines(k *Kamera) ([]engineMaker, error) {
 	if k.Paika.Empty() {
 		return []engineMaker{func() (engine, string, string, error) {
-			return &groupEngine{}, EngineNone, "", nil
+			return &groupEngine{iz: k.Izolyaciya, dir: k.Dir}, EngineNone, "", nil
 		}}, nil
 	}
 	return []engineMaker{func() (engine, string, string, error) {
 		k.Warnings = append(k.Warnings, rlimitWarnings(k.Paika)...)
-		return &groupEngine{limits: true, p: k.Paika}, EngineRlimit, "", nil
+		return &groupEngine{limits: true, p: k.Paika, iz: k.Izolyaciya, dir: k.Dir}, EngineRlimit, "", nil
 	}}, nil
 }
 
