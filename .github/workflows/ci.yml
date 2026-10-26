@@ -40,7 +40,15 @@ jobs:
         with:
           version: v2.15
 
+      # Ubuntu 23.10+ через AppArmor запрещает пространства имён пользователя
+      # программам без профиля, а тестовым бинарникам профиль не поставить.
+      - name: разрешить пространства имён для тестов изоляции
+        if: runner.os == 'Linux'
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - name: go test -race
+        env:
+          BALANDA_TEST_IZOLYACIYA: "1"
         run: go test -race -count=1 ./...
 
       # Под root на ubuntu cgroups v2 доступны, так проверяется движок,
@@ -151,6 +159,10 @@ jobs:
         run: |
           sudo dpkg -i snapshot/balanda_*_amd64.deb
           /usr/bin/balanda version
+          # Изоляция из пакета: профиль AppArmor из postinstall, без sysctl.
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null || true
+          cd "$RUNNER_TEMP" && /usr/bin/balanda sadit -- sh -c 'touch /etc/balanda-test 2>/dev/null && exit 1; touch ok'
+          test -f "$RUNNER_TEMP/ok"
 
       - name: install.ps1 из snapshot (как irm | iex)
         if: runner.os == 'Windows'
