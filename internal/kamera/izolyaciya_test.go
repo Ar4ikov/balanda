@@ -1,6 +1,7 @@
 package kamera
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,17 +21,28 @@ func needIzolyaciya(t *testing.T) {
 	}
 }
 
+// runIz запускает помощника в камере. Его stderr попадает в лог теста,
+// чтобы по упавшему CI было видно, что ответила система. Вывод идёт
+// в файл: в AppContainer на Windows поток должен быть файлом.
 func runIz(t *testing.T, s *Store, mode, arg string, iz Izolyaciya) int {
 	t.Helper()
 	t.Setenv("BALANDA_TEST_ARG", arg)
+	errf, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer errf.Close()
 	_, code, err := Sadit(s, RunOptions{
 		Cmd:        helperCmd(t, mode),
 		Izolyaciya: iz,
 		Stdout:     io.Discard,
-		Stderr:     io.Discard,
+		Stderr:     errf,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if out, _ := os.ReadFile(errf.Name()); len(bytes.TrimSpace(out)) > 0 {
+		t.Logf("%s %s: код %d: %s", mode, arg, code, bytes.TrimSpace(out))
 	}
 	return code
 }
@@ -72,6 +84,17 @@ func TestIzolyaciyaSteny(t *testing.T) {
 	}
 	if code := runIz(t, s, "write", filepath.Join(outside, "bez.txt"), Izolyaciya{Off: true}); code != 0 {
 		t.Errorf("без изоляции запись не прошла: код %d", code)
+	}
+	// На Linux и macOS секреты закрыты, даже если рабочий каталог — весь
+	// дом. На Windows рабочий каталог открыт AppContainer целиком.
+	if runtime.GOOS != "windows" {
+		t.Chdir(home)
+		if code := runIz(t, s, "read", key, Izolyaciya{}); code == 0 {
+			t.Error("из домашнего каталога камера прочитала ключ из ~/.ssh")
+		}
+		if code := runIz(t, s, "write", filepath.Join(home, "ok.txt"), Izolyaciya{}); code != 0 {
+			t.Errorf("запись в домашний каталог, когда он рабочий: код %d", code)
+		}
 	}
 }
 

@@ -106,7 +106,7 @@ func odinochkaSetup(o zekOpts) error {
 		return fmt.Errorf("сделать систему только для чтения: %w", err)
 	}
 	// Каталоги для записи снимаем копией до того, как их закроют
-	// /tmp, маски секретов или спрятанный дом, и возвращаем в конце.
+	// /tmp или спрятанный дом, и возвращаем перед масками секретов.
 	type tree struct {
 		path string
 		fd   int
@@ -161,12 +161,6 @@ func odinochkaSetup(o zekOpts) error {
 		if err := maskDir(home); err != nil {
 			return err
 		}
-	} else {
-		for _, p := range secretPaths(home) {
-			if err := maskPath(p); err != nil {
-				return err
-			}
-		}
 	}
 	if _, err := os.Stat(o.path); err != nil && exeFd >= 0 {
 		if err := os.MkdirAll(exeDir, 0o755); err != nil {
@@ -182,6 +176,13 @@ func odinochkaSetup(o zekOpts) error {
 		}
 		if err := unix.MoveMount(t.fd, "", unix.AT_FDCWD, t.path, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
 			return fmt.Errorf("вернуть %s на запись: %w", t.path, err)
+		}
+	}
+	// Секреты прячутся последними: даже если рабочий каталог — весь дом,
+	// ~/.ssh в нём закрыт.
+	for _, p := range secretPaths(home) {
+		if err := maskPath(p); err != nil {
+			return err
 		}
 	}
 	// В новом пространстве PID процессы хоста не видны, если /proc свой.

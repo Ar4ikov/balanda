@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -41,42 +42,64 @@ func sandboxProfile(o zekOpts) (string, []string) {
 		params = append(params, "-D", name+"="+val)
 		return `(param "` + name + `")`
 	}
+	// Seatbelt сравнивает настоящие пути: /var/folders для него —
+	// /private/var/folders. Каждый путь идёт в правило в обоих видах.
+	subpaths := func(name, p string) []string {
+		out := []string{"(subpath " + param(name, p) + ")"}
+		if real := realPath(p); real != p {
+			out = append(out, "(subpath "+param(name+"R", real)+")")
+		}
+		return out
+	}
 	b.WriteString("(version 1)\n(allow default)\n")
 	if !o.set {
 		b.WriteString("(deny network*)\n")
-		b.WriteString(`(allow network* (local ip "localhost:*"))` + "\n")
-		b.WriteString(`(allow network* (remote ip "localhost:*"))` + "\n")
-		b.WriteString("(allow network* (remote unix-socket))\n")
+		b.WriteString(`(allow network-bind network-inbound (local ip "localhost:*"))` + "\n")
+		b.WriteString(`(allow network-outbound (remote ip "localhost:*"))` + "\n")
+		b.WriteString("(allow network-outbound (remote unix-socket))\n")
 	}
 	b.WriteString("(deny file-write*)\n")
 	b.WriteString(`(allow file-write* (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))` + "\n")
 	home := userHome()
-	var hidden []string
 	if o.bezDoma && home != "" {
-		hidden = append(hidden, "(subpath "+param("HOME", home)+")")
-	} else {
-		for i, p := range secretPaths(home) {
-			hidden = append(hidden, "(subpath "+param(fmt.Sprintf("S%d", i), p)+")")
-		}
-	}
-	if len(hidden) > 0 {
-		b.WriteString("(deny file-read* file-write* " + strings.Join(hidden, " ") + ")\n")
+		b.WriteString("(deny file-read* file-write* " + strings.Join(subpaths("HOME", home), " ") + ")\n")
 	}
 	var open []string
 	for i, p := range append([]string{o.dir}, o.zapis...) {
 		if p != "" {
-			open = append(open, "(subpath "+param(fmt.Sprintf("W%d", i), p)+")")
+			open = append(open, subpaths(fmt.Sprintf("W%d", i), p)...)
 		}
 	}
 	if o.tmp != "" {
-		open = append(open, "(subpath "+param("TMP", o.tmp)+")")
+		open = append(open, subpaths("TMP", o.tmp)...)
 	}
 	if len(open) > 0 {
 		b.WriteString("(allow file-read* file-write* " + strings.Join(open, " ") + ")\n")
 	}
+	// Секреты — последним правилом: оно сильнее рабочего каталога, даже
+	// если тот — весь дом.
+	var hidden []string
+	for i, p := range secretPaths(home) {
+		hidden = append(hidden, subpaths(fmt.Sprintf("S%d", i), p)...)
+	}
+	b.WriteString("(deny file-read* file-write* " + strings.Join(hidden, " ") + ")\n")
 	// Сигналы — только своим.
 	b.WriteString("(deny signal)\n(allow signal (target same-sandbox))\n")
 	return b.String(), params
+}
+
+// realPath раскрывает символические ссылки в пути. Если файла нет,
+// раскрывается ближайший существующий родитель: /var/run/docker.sock
+// без Docker становится /private/var/run/docker.sock.
+func realPath(p string) string {
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(realPath(parent), filepath.Base(p))
 }
 
 // zekRun на macOS: rlimit, затем exec в sandbox-exec с профилем.
