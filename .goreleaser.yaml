@@ -68,14 +68,22 @@ nfpms:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-# Заметки к релизу пишет release-please, GoReleaser их не трогает
-# и только догружает файлы в уже созданный релиз.
+# Заметки к релизу собирает tools/reliz и передаёт через --release-notes.
+# disable здесь ставить нельзя: тогда GoReleaser не прочтёт и этот файл.
+# Без --release-notes остаётся запасной список коммитов.
 changelog:
-  disable: true
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+      - "^(chore|test|style|refactor)(\\(.+\\))?!?:"
 
 release:
   github:
     owner: Ar4ikov
     name: balanda
-  mode: keep-existing
+  name_template: "{{ .Tag }}"
+  # replace: перезапуск после сбоя перепишет заметки в уже созданном релизе.
+  mode: replace
   replace_existing_artifacts: true

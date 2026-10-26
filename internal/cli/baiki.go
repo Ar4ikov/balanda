@@ -71,7 +71,7 @@ func newTravitCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVarP(&tema, "tema", "t", "", "тема: `deploy|git|prod|review|legacy|db|oncall|deadline`")
+	c.Flags().StringVarP(&tema, "tema", "t", "", "тема: `deploy|git|prod|review|legacy|db|oncall|deadline|interview|meetings|security|frontend`")
 	c.Flags().BoolVar(&list, "spisok", false, "показать темы")
 	c.Flags().Uint64Var(&zerno, "zerno", 0, "зерно случайности `N`, 0 — каждый раз новое")
 	return c

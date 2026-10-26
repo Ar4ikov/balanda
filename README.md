@@ -98,7 +98,7 @@ balanda proba --porog 40 docs/*.md          # код 1, если воды бол
 
 ```sh
 balanda travit                 # случайная байка
-balanda travit --tema deploy   # темы: deploy, git, prod, review, legacy, db, oncall, deadline
+balanda travit --tema deploy   # 12 тем: deploy, git, prod, review, db, oncall, security, …
 balanda travit --spisok        # список тем
 ```
 
@@ -170,7 +170,7 @@ go install github.com/Ar4ikov/balanda@latest
 
 ## Версии и релизы
 
-Версии идут по SemVer. Номер следующей версии и `CHANGELOG.md` ведёт release-please по сообщениям коммитов в формате Conventional Commits: `fix` поднимает патч, `feat` — минорную версию, пока проект до 1.0. После слияния release PR GoReleaser собирает релиз: архивы для linux, darwin и windows на amd64 и arm64, `checksums.txt`, пакеты .deb, .rpm и .apk. Установленную версию, коммит и дату сборки показывает `balanda version`.
+Версии идут по SemVer, релиз выходит сам. После каждого зелёного CI на `main` workflow Release смотрит коммиты с последнего тега в формате Conventional Commits: `fix` и `perf` поднимают патч, `feat` — минорную версию, `!` или `BREAKING CHANGE` — мажорную (до 1.0 — тоже минорную). Если были только `docs`, `ci`, `chore` и подобные, релиз не выходит. Дальше workflow ставит тег, GoReleaser собирает архивы для linux, darwin и windows на amd64 и arm64, `checksums.txt`, пакеты .deb, .rpm и .apk, а заметки к релизу собираются из сообщений коммитов по разделам: новое, исправления, документация, сборка. Какой релиз выйдет после слияния PR, видно в сводке CI этого PR. Установленную версию, коммит и дату сборки показывает `balanda version`.
 
 ## Лицензия
 

@@ -1,7 +1,16 @@
 name: Release
 
+# Релиз выходит сам после зелёного CI на main. Версию считает tools/reliz
+# по коммитам с последнего тега: feat поднимает минорную версию, fix и
+# perf — патч, «!» или BREAKING CHANGE — мажорную (до 1.0 — минорную).
+# Если с последнего тега были только docs, ci, chore и подобные коммиты,
+# релиз не выходит. Заметки к релизу собираются из сообщений коммитов.
+# Тег от GITHUB_TOKEN не запускает другие workflow, поэтому тег,
+# GoReleaser и проверка установки живут здесь же.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -13,57 +22,88 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release-please:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     outputs:
-      release_created: ${{ steps.rp.outputs.release_created }}
-      tag_name: ${{ steps.rp.outputs.tag_name }}
-    steps:
-      - id: rp
-        uses: googleapis/release-please-action@v5
-        with:
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
-
-  # Тег и релиз от GITHUB_TOKEN не запускают другие workflow, поэтому
-  # GoReleaser работает здесь же и догружает файлы в релиз release-please.
-  goreleaser:
-    needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
 
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v7
+      - name: версия
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --force --tags origin
+          # Если тег уже стоит на этом коммите, а релиза нет, прошлый
+          # прогон упал после тега: доделываем этот релиз.
+          tag=$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n 1)
+          if [ -n "$tag" ] && gh release view "$tag" >/dev/null 2>&1; then
+            echo "Релиз $tag уже есть." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ -z "$tag" ]; then
+            tag=$(go run ./tools/reliz next)
+          fi
+          if [ -z "$tag" ]; then
+            echo "Выпускать нечего: с последнего тега нет feat, fix, perf и ломающих изменений." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: заметки к релизу
+        if: steps.version.outputs.tag != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          go run ./tools/reliz notes --tag "$TAG" > "$RUNNER_TEMP/notes.md"
+          { echo "## $TAG"; echo; cat "$RUNNER_TEMP/notes.md"; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: тег
+        if: steps.version.outputs.tag != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "balanda $TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+
+      - name: GoReleaser
+        if: steps.version.outputs.tag != ''
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean --release-notes ${{ runner.temp }}/notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   install-check:
     name: install-check (${{ matrix.os }})
-    needs: [release-please, goreleaser]
+    needs: release
+    if: needs.release.outputs.tag != ''
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      BALANDA_VERSION: ${{ needs.release-please.outputs.tag_name }}
-      TAG: ${{ needs.release-please.outputs.tag_name }}
+      BALANDA_VERSION: ${{ needs.release.outputs.tag }}
+      TAG: ${{ needs.release.outputs.tag }}
     steps:
       - name: curl | sh
         if: runner.os != 'Windows'
