@@ -25,11 +25,18 @@ func isolateCmd(cmd *exec.Cmd, iz Izolyaciya) error {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	a := cmd.SysProcAttr
-	flags := unix.CLONE_NEWUSER | unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS
+	flags := unix.CLONE_NEWNS | unix.CLONE_NEWPID | unix.CLONE_NEWIPC | unix.CLONE_NEWUTS
 	if !iz.Set {
 		flags |= unix.CLONE_NEWNET
 	}
-	a.Cloneflags |= uintptr(flags)
+	if os.Geteuid() == 0 {
+		// root может строить стены и без пространства имён пользователя,
+		// а в нём потерял бы доступ к чужим файлам. Права у команды
+		// __zek отнимет перед запуском.
+		a.Cloneflags |= uintptr(flags)
+		return nil
+	}
+	a.Cloneflags |= uintptr(flags | unix.CLONE_NEWUSER)
 	uid, gid := os.Getuid(), os.Getgid()
 	a.UidMappings = []syscall.SysProcIDMap{{ContainerID: uid, HostID: uid, Size: 1}}
 	a.GidMappings = []syscall.SysProcIDMap{{ContainerID: gid, HostID: gid, Size: 1}}
@@ -261,6 +268,15 @@ func initRun(o zekOpts) int {
 		fmt.Fprintln(os.Stderr, "balanda: не сбросить права:", err)
 		return ExitNoStart
 	}
+	if os.Geteuid() == 0 {
+		// Под root пространства имён пользователя нет: команда осталась
+		// бы настоящим root. Убираем все capabilities из ограничивающего
+		// набора, и после exec у неё не будет ни одной.
+		if err := dropBoundingSet(); err != nil {
+			fmt.Fprintln(os.Stderr, "balanda: не сбросить права root:", err)
+			return ExitNoStart
+		}
+	}
 	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
 		fmt.Fprintln(os.Stderr, "balanda: не запретить подъём прав:", err)
 		return ExitNoStart
@@ -311,6 +327,21 @@ func initRun(o zekOpts) int {
 			return 128 + int(ws.Signal())
 		}
 	}
+}
+
+// dropBoundingSet убирает все capabilities из ограничивающего набора
+// текущего потока.
+func dropBoundingSet() error {
+	for c := 0; c <= 63; c++ {
+		err := unix.Prctl(unix.PR_CAPBSET_DROP, uintptr(c), 0, 0, 0)
+		if errors.Is(err, unix.EINVAL) {
+			break // capabilities с таким номером ядро не знает
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ProbeIzolyaciya проверяет, соберётся ли одиночка на этой машине.
