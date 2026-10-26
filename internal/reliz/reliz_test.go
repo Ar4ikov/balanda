@@ -42,6 +42,15 @@ func TestParse(t *testing.T) {
 	if ch.BreakingNote != "--paika теперь обязателен" {
 		t.Errorf("BreakingNote = %q", ch.BreakingNote)
 	}
+	// Сноска на нескольких строках кончается на следующей сноске.
+	ch, _ = Parse(Commit{Subject: "feat!: x", Body: "Тело.\n\nBREAKING CHANGE: в камере нет сети и права\nзаписи вне рабочего каталога.\n\nCo-Authored-By: X <x@y>"})
+	if ch.BreakingNote != "в камере нет сети и права записи вне рабочего каталога." {
+		t.Errorf("BreakingNote на двух строках = %q", ch.BreakingNote)
+	}
+	ch, _ = Parse(Commit{Subject: "feat!: x", Body: "BREAKING-CHANGE:\nтекст со следующей строки\nRefs: #12"})
+	if ch.BreakingNote != "текст со следующей строки" {
+		t.Errorf("BreakingNote со следующей строки = %q", ch.BreakingNote)
+	}
 }
 
 func TestBump(t *testing.T) {
@@ -105,6 +114,11 @@ func TestParagraphs(t *testing.T) {
 	if len(got) != 2 || got[0] != "Первая строка продолжение." || got[1] != "Второй абзац." {
 		t.Fatalf("paragraphs = %q", got)
 	}
+	// Продолжение сноски BREAKING CHANGE в тело не попадает.
+	got = paragraphs("Тело.\n\nBREAKING CHANGE: нет сети и права\nзаписи.\n\nCo-Authored-By: X <x@y>")
+	if len(got) != 1 || got[0] != "Тело." {
+		t.Fatalf("paragraphs со сноской = %q", got)
+	}
 }
 
 func TestNotes(t *testing.T) {
@@ -123,7 +137,7 @@ func TestNotes(t *testing.T) {
 	n := Notes(changes, Options{Repo: "o/r", Prev: "v0.1.0", Tag: "v0.2.0"})
 	for _, want := range []string{
 		"### ⚠ Ломает совместимость",
-		"старый формат не читается",
+		"Старый формат не читается",
 		"### Новое",
 		"- **камера:** лимит на процессы ([aaaaaaa](https://github.com/o/r/commit/aaaaaaaaaaaa))",
 		`Ищет \_\_pycache\_\_ и \*.pyc.`,

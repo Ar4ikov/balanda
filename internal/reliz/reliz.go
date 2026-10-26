@@ -59,15 +59,38 @@ func Parse(c Commit) (Change, bool) {
 		Breaking: m[3] == "!",
 		Desc:     strings.TrimSpace(m[4]),
 	}
-	for _, line := range strings.Split(c.Body, "\n") {
-		for _, p := range []string{"BREAKING CHANGE:", "BREAKING-CHANGE:"} {
-			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), p); ok {
-				ch.Breaking = true
-				ch.BreakingNote = strings.TrimSpace(rest)
-			}
+	// Текст сноски может идти на нескольких строках: он кончается
+	// там, где начинается следующая сноска, или в конце сообщения.
+	lines := strings.Split(c.Body, "\n")
+	for i := 0; i < len(lines); i++ {
+		rest, ok := cutBreaking(lines[i])
+		if !ok {
+			continue
 		}
+		ch.Breaking = true
+		note := []string{rest}
+		for i+1 < len(lines) && !footerRe.MatchString(strings.TrimSpace(lines[i+1])) {
+			i++
+			note = append(note, lines[i])
+		}
+		ch.BreakingNote = strings.Join(strings.Fields(strings.Join(note, " ")), " ")
 	}
 	return ch, true
+}
+
+// breakingRe — начало сноски о несовместимости.
+var breakingRe = regexp.MustCompile(`^BREAKING[ -]CHANGE:\s*`)
+
+// footerRe — начало любой сноски: «Токен: значение» или «Токен #значение».
+var footerRe = regexp.MustCompile(`^(?:BREAKING[ -]CHANGE|[A-Za-z][A-Za-z0-9-]*)(?::\s| #)`)
+
+func cutBreaking(line string) (string, bool) {
+	line = strings.TrimSpace(line)
+	loc := breakingRe.FindStringIndex(line)
+	if loc == nil {
+		return "", false
+	}
+	return line[loc[1]:], true
 }
 
 // LevelOf — вклад одного изменения в версию.
@@ -225,10 +248,11 @@ var sections = []section{
 }
 
 // trailerRe — служебные строки в конце сообщения коммита.
-var trailerRe = regexp.MustCompile(`^(Co-Authored-By|Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|Refs|BREAKING[ -]CHANGE):`)
+var trailerRe = regexp.MustCompile(`^(Co-Authored-By|Co-authored-by|Signed-off-by|Claude-Session|Reviewed-by|Refs):`)
 
 // paragraphs склеивает перенесённые строки тела коммита в абзацы
-// и убирает служебные строки.
+// и убирает служебные строки. С «BREAKING CHANGE:» начинаются сноски:
+// дальше тела нет, текст сноски идёт в раздел о несовместимости.
 func paragraphs(body string) []string {
 	var out []string
 	var cur []string
@@ -240,6 +264,9 @@ func paragraphs(body string) []string {
 	}
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
+		if _, ok := cutBreaking(line); ok {
+			break
+		}
 		switch {
 		case line == "":
 			flush()
@@ -309,7 +336,7 @@ func Notes(changes []Change, o Options) string {
 		for _, ch := range breaking {
 			line := item(o.Repo, ch)
 			if ch.BreakingNote != "" {
-				line += "\n\n  " + escapeMD(ch.BreakingNote)
+				line += "\n\n  " + capitalize(escapeMD(ch.BreakingNote))
 			}
 			b.WriteString(line + "\n")
 		}
