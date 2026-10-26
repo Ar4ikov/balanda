@@ -53,6 +53,10 @@ jobs:
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: записать GIF
+        # Chromium внутри VHS без своей песочницы: после sysctl выше она
+        # пробует пространства имён пользователя и не стартует на раннере.
+        env:
+          VHS_NO_SANDBOX: "true"
         run: |
           for tape in docs/tapes/*.tape; do
             echo "== $tape"
