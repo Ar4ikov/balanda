@@ -109,6 +109,7 @@ type Kamera struct {
 	Cmd         []string   `json:"cmd"`
 	Dir         string     `json:"dir"`
 	Paika       Paika      `json:"paika"`
+	Izolyaciya  Izolyaciya `json:"izolyaciya"`
 	Engine      string     `json:"engine,omitempty"`
 	EngineInfo  string     `json:"engine_info,omitempty"`
 	Background  bool       `json:"background,omitempty"`

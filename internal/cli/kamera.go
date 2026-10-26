@@ -14,7 +14,28 @@ import (
 	"github.com/Ar4ikov/balanda/internal/vyvod"
 )
 
-const platformTable = `Как ставятся лимиты:
+const platformTable = `Изоляция. По умолчанию камера — одиночка: без сети, вся система
+только на чтение, писать можно в рабочий каталог и в свой временный.
+Ключи и токены из домашнего каталога (~/.ssh, ~/.aws, ~/.kube,
+~/.docker, ~/.config/gh и другие) спрятаны, сокет Docker тоже.
+--set оставляет сеть, --zapis КАТАЛОГ открывает ещё каталог на запись,
+--bez-doma прячет домашний каталог целиком, --bez-izolyacii выключает
+изоляцию.
+
+  Linux    пространства имён: свои сеть (только lo), монтирование, PID,
+           IPC и имя хоста; root не нужен. В Ubuntu 23.10+ нужен профиль
+           AppArmor: пакет .deb ставит его сам, иначе balanda подскажет
+           команду.
+  macOS    sandbox-exec (Seatbelt): сеть кроме localhost закрыта, запись
+           только в рабочий каталог, свой TMPDIR.
+  Windows  AppContainer: сеть закрыта, доступ к файлам — только к рабочему
+           каталогу, --zapis и каталогу программы; программы, которым
+           нужен профиль пользователя или реестр, могут не запуститься.
+
+Изоляция делит ядро с хостом, как любой контейнер: от уязвимостей ядра
+и ОС она не защищает. Для совсем чужого кода нужна виртуальная машина.
+
+Лимиты:
 
   Linux, cgroups v2  cpu — доля ядер (cpu.max), mem — memory.max без свопа,
                      time — надзиратель. Root не нужен, но нужна cgroup,
@@ -30,12 +51,11 @@ const platformTable = `Как ставятся лимиты:
   Windows            Job Object: cpu — жёсткий потолок CPU rate, mem — лимит
                      памяти на всё задание, time — надзиратель.
 
-Везде камера — это группа процессов (на Windows — Job Object): по time,
-отбою и выходу главного процесса гасится всё дерево. Файловая система
-и сеть не изолируются: это ограничитель ресурсов, а не защита
-от недоверенного кода.
+Везде по time, отбою и выходу главного процесса гасится всё дерево
+процессов камеры.
 
-Какой движок достанется новой камере, пишет balanda pereklichka.`
+Какой движок достанется новой камере и работает ли изоляция, пишет
+balanda pereklichka.`
 
 func newSaditCmd() *cobra.Command {
 	var (
@@ -43,13 +63,15 @@ func newSaditCmd() *cobra.Command {
 		name     string
 		bg       bool
 		quiet    bool
+		iz       kamera.Izolyaciya
 	)
 	c := &cobra.Command{
 		Use:     "sadit [флаги] <команда> [аргументы]",
 		Aliases: []string{"run"},
 		GroupID: groupKamera,
 		Short:   "посадить процесс в камеру с пайкой ресурсов",
-		Long: `Запускает команду в «камере»: с лимитами CPU, памяти и времени.
+		Long: `Запускает команду в «камере»: в изоляции и с лимитами CPU, памяти
+и времени.
 Без --fon ждёт, пока команда выйдет, и возвращает её код выхода.
 Если вышло время, код выхода 124, как у timeout.
 
@@ -61,12 +83,21 @@ func newSaditCmd() *cobra.Command {
 ` + platformTable,
 		Example: `  balanda sadit --paika cpu=1,mem=256m,time=30s -- make test
   balanda sadit --paika time=5s sleep 60
-  balanda sadit --fon --imya sborka --paika mem=1g -- go build ./...`,
+  balanda sadit --fon --imya sborka --set --paika mem=1g -- go build ./...
+  balanda sadit --zapis ~/.cache/go-build -- go test ./...`,
 		Args: minArgs(1, "команда, которую посадить"),
 		RunE: func(c *cobra.Command, args []string) error {
 			p, err := kamera.ParsePaika(paikaStr)
 			if err != nil {
 				return err
+			}
+			if err := iz.Normalize(); err != nil {
+				return err
+			}
+			if iz.On() && !quiet {
+				if dir, err := os.Getwd(); err == nil && kamera.RiskyDir(dir) {
+					fmt.Fprintf(c.ErrOrStderr(), "balanda: рабочий каталог %s открыт камере на запись целиком; лучше запускать из каталога проекта\n", dir)
+				}
 			}
 			s, err := kamera.OpenStore()
 			if err != nil {
@@ -81,6 +112,7 @@ func newSaditCmd() *cobra.Command {
 				Name:       name,
 				Cmd:        args,
 				Paika:      p,
+				Izolyaciya: iz,
 				Background: bg,
 				Stdin:      os.Stdin,
 				Stdout:     os.Stdout,
@@ -116,6 +148,10 @@ func newSaditCmd() *cobra.Command {
 	c.Flags().StringVarP(&name, "imya", "n", "", "имя камеры для pereklichka и shmon")
 	c.Flags().BoolVarP(&bg, "fon", "d", false, "запустить в фоне, вывод писать в журнал камеры")
 	c.Flags().BoolVarP(&quiet, "tiho", "q", false, "не писать итог и предупреждения в stderr")
+	c.Flags().BoolVar(&iz.Off, "bez-izolyacii", false, "выключить изоляцию: процесс видит сеть и может писать везде, где может пользователь")
+	c.Flags().BoolVar(&iz.Set, "set", false, "оставить камере сеть")
+	c.Flags().StringArrayVar(&iz.Zapis, "zapis", nil, "разрешить запись ещё в `КАТАЛОГ` (можно несколько раз)")
+	c.Flags().BoolVar(&iz.BezDoma, "bez-doma", false, "спрятать домашний каталог целиком, а не только секреты")
 	return c
 }
 
@@ -131,6 +167,9 @@ func summary(p vyvod.Palette, k *kamera.Kamera) string {
 	}
 	if k.Engine != "" {
 		b.WriteString(", движок: " + kamera.EngineTitle(k.Engine))
+	}
+	if k.Izolyaciya.Off {
+		b.WriteString(", без изоляции")
 	}
 	return b.String() + p.Reset
 }
@@ -202,6 +241,11 @@ func newPereklichkaCmd() *cobra.Command {
 			}
 			eng, info := kamera.EngineFor()
 			fmt.Fprintf(out, "%sновые камеры с пайкой: %s (%s)%s\n", p.Dim, kamera.EngineTitle(eng), info, p.Reset)
+			if err := kamera.ProbeIzolyaciya(); err != nil {
+				fmt.Fprintf(out, "%sизоляция: %sне работает%s%s, подробности: balanda sadit -- true%s\n", p.Dim, p.Yellow, p.Reset, p.Dim, p.Reset)
+			} else {
+				fmt.Fprintf(out, "%sизоляция: работает%s\n", p.Dim, p.Reset)
+			}
 			if forget {
 				n := 0
 				for _, k := range all {
@@ -295,6 +339,11 @@ Windows без отладочных прав не отдаёт, вместо н�
 			row("команда", k.CmdLine())
 			row("каталог", k.Dir)
 			row("пайка", k.Paika.String())
+			izol := k.Izolyaciya.String()
+			if len(k.Izolyaciya.Zapis) > 0 {
+				izol += "; запись ещё в " + strings.Join(k.Izolyaciya.Zapis, ", ")
+			}
+			row("изоляция", izol)
 			eng := kamera.EngineTitle(k.Engine)
 			if k.EngineInfo != "" {
 				eng += " (" + k.EngineInfo + ")"

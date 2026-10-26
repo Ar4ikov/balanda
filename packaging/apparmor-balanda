@@ -1,0 +1,11 @@
+# Профиль AppArmor для balanda. Ubuntu 23.10+ по умолчанию запрещает
+# программам создавать пространства имён пользователя, а на них стоят
+# стены изолированной камеры. Профиль разрешает это только balanda.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile balanda /usr/bin/balanda flags=(unconfined) {
+  userns,
+
+  include if exists <local/balanda>
+}

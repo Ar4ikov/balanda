@@ -64,6 +64,11 @@ nfpms:
         dst: /usr/share/doc/balanda/copyright
       - src: ./internal/voda/LICENSE-avoid-ai-writing-russian
         dst: /usr/share/doc/balanda/LICENSE-avoid-ai-writing-russian
+      - src: ./packaging/apparmor-balanda
+        dst: /usr/share/balanda/apparmor-balanda
+    scripts:
+      postinstall: ./packaging/postinstall.sh
+      postremove: ./packaging/postremove.sh
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

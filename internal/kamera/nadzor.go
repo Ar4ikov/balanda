@@ -72,6 +72,7 @@ type RunOptions struct {
 	Name       string
 	Cmd        []string
 	Paika      Paika
+	Izolyaciya Izolyaciya
 	Background bool
 	Stdin      io.Reader
 	Stdout     io.Writer
@@ -93,6 +94,7 @@ func Sadit(s *Store, o RunOptions) (*Kamera, int, error) {
 		Cmd:        o.Cmd,
 		Dir:        dir,
 		Paika:      o.Paika,
+		Izolyaciya: o.Izolyaciya,
 		Background: o.Background,
 		Status:     StatusSidit,
 		Started:    time.Now(),
@@ -205,7 +207,7 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 	k.Nadzor = os.Getpid()
 	k.NadzorStart = procStart(k.Nadzor)
 
-	eng, cmd, err := startCmd(k, stdin, stdout, stderr, fg)
+	eng, run, err := startCmd(k, stdin, stdout, stderr, fg)
 	if err != nil {
 		code := ExitNoStart
 		now := time.Now()
@@ -217,7 +219,7 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 		fmt.Fprintf(notify, "balanda: %s: %s\n", k.Label(), k.Error)
 		return code
 	}
-	k.PID = cmd.Process.Pid
+	k.PID = run.pid()
 	k.PGID = k.PID
 	k.ProcStart = procStart(k.PID)
 	if err := s.Save(k); err != nil {
@@ -251,7 +253,7 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 	})
 	stopSignals := forwardSignals(eng, fg)
 
-	waitErr := cmd.Wait()
+	ps, waitErr := run.wait()
 	if timer != nil {
 		timer.Stop()
 	}
@@ -261,7 +263,7 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 		restoreTerminal()
 	}
 
-	usage, engReason := eng.finish(cmd.ProcessState)
+	usage, engReason := eng.finish(ps)
 	if engReason != "" {
 		setReason(engReason)
 	}
@@ -269,7 +271,7 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 	k.Ended = &now
 	k.Usage = usage
 
-	code, sig := exitInfo(cmd.ProcessState, waitErr)
+	code, sig := exitInfo(ps, waitErr)
 	if sig == "SIGXCPU" {
 		setReason(ReasonCPU)
 	}
@@ -302,10 +304,37 @@ func supervise(s *Store, k *Kamera, stdin io.Reader, stdout, stderr, notify io.W
 
 // startCmd выбирает движок и запускает процесс. Если движок не смог
 // запустить процесс, пробует запасной (например, rlimit вместо cgroup).
-func startCmd(k *Kamera, stdin io.Reader, stdout, stderr io.Writer, fg bool) (engine, *exec.Cmd, error) {
+// running — запущенный процесс: через exec.Cmd или созданный движком.
+type running struct {
+	cmd  *exec.Cmd
+	proc *os.Process
+}
+
+func (r running) pid() int {
+	if r.cmd != nil {
+		return r.cmd.Process.Pid
+	}
+	return r.proc.Pid
+}
+
+func (r running) wait() (*os.ProcessState, error) {
+	if r.cmd != nil {
+		err := r.cmd.Wait()
+		return r.cmd.ProcessState, err
+	}
+	return r.proc.Wait()
+}
+
+// starter — движок, который сам создаёт процесс (AppContainer на Windows).
+// ok=false — пусть процесс создаст exec.Cmd.
+type starter interface {
+	start(cmd *exec.Cmd) (p *os.Process, ok bool, err error)
+}
+
+func startCmd(k *Kamera, stdin io.Reader, stdout, stderr io.Writer, fg bool) (engine, running, error) {
 	engines, err := newEngines(k)
 	if err != nil {
-		return nil, nil, err
+		return nil, running{}, err
 	}
 	var lastErr error
 	for i, mk := range engines {
@@ -319,7 +348,7 @@ func startCmd(k *Kamera, stdin io.Reader, stdout, stderr io.Writer, fg bool) (en
 		if lp, err := exec.LookPath(k.Cmd[0]); err == nil {
 			cmd.Path = lp
 		} else if !errors.Is(err, exec.ErrDot) {
-			return nil, nil, fmt.Errorf("команда %q не найдена", k.Cmd[0])
+			return nil, running{}, fmt.Errorf("команда %q не найдена", k.Cmd[0])
 		}
 		cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, stderr
 		setGroup(cmd, fg)
@@ -330,35 +359,53 @@ func startCmd(k *Kamera, stdin io.Reader, stdout, stderr io.Writer, fg bool) (en
 				k.Warnings = append(k.Warnings, fmt.Sprintf("%s не сработал: %v", EngineTitle(name), err))
 				continue
 			}
-			return nil, nil, err
+			return nil, running{}, err
 		}
-		if err := cmd.Start(); err != nil {
-			lastErr = err
+		run := running{cmd: cmd}
+		var startErr error
+		if st, ok := eng.(starter); ok {
+			p, custom, err := st.start(cmd)
+			if custom {
+				run = running{proc: p}
+			}
+			startErr = err
+			if !custom && err == nil {
+				startErr = cmd.Start()
+			}
+		} else {
+			startErr = cmd.Start()
+		}
+		if startErr != nil {
+			lastErr = startErr
 			eng.finish(nil)
-			if i < len(engines)-1 && !errors.Is(err, exec.ErrNotFound) {
-				k.Warnings = append(k.Warnings, fmt.Sprintf("%s не сработал: %v", EngineTitle(name), err))
+			if i < len(engines)-1 && !errors.Is(startErr, exec.ErrNotFound) {
+				k.Warnings = append(k.Warnings, fmt.Sprintf("%s не сработал: %v", EngineTitle(name), startErr))
 				continue
 			}
-			return nil, nil, err
+			return nil, running{}, startErr
 		}
-		if err := eng.started(cmd.Process); err != nil {
+		proc := cmd.Process
+		if run.proc != nil {
+			proc = run.proc
+		}
+		if err := eng.started(proc); err != nil {
 			eng.kill(false)
-			_ = cmd.Wait()
+			_, _ = run.wait()
 			eng.finish(nil)
 			lastErr = err
 			if i < len(engines)-1 {
 				k.Warnings = append(k.Warnings, fmt.Sprintf("%s не сработал: %v", EngineTitle(name), err))
 				continue
 			}
-			return nil, nil, err
+			return nil, running{}, err
 		}
 		k.Engine, k.EngineInfo = name, info
-		return eng, cmd, nil
+		return eng, run, nil
 	}
 	if lastErr == nil {
 		lastErr = errors.New("нет ни одного движка")
 	}
-	return nil, nil, lastErr
+	return nil, running{}, lastErr
 }
 
 // engineMaker создаёт движок и возвращает его имя и описание.

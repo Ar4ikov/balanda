@@ -93,6 +93,10 @@ type jobEngine struct {
 	job  windows.Handle
 	proc windows.Handle
 	p    Paika
+	iz   Izolyaciya
+	dir  string
+	sid  *windows.SID
+	tmp  string
 }
 
 func newJobEngine(k *Kamera) (*jobEngine, error) {
@@ -132,7 +136,21 @@ func newJobEngine(k *Kamera) (*jobEngine, error) {
 			}
 		}
 	}
-	return &jobEngine{name: name, job: h, p: k.Paika}, nil
+	e := &jobEngine{name: name, job: h, p: k.Paika, iz: k.Izolyaciya, dir: k.Dir}
+	if e.iz.On() {
+		sid, err := appContainerSID(containerName(k.Dir))
+		if err != nil {
+			_ = windows.CloseHandle(h)
+			return nil, errors.New(isolationHint(err))
+		}
+		tmp, err := containerTemp(sid)
+		if err != nil {
+			_ = windows.CloseHandle(h)
+			return nil, errors.New(isolationHint(err))
+		}
+		e.sid, e.tmp = sid, tmp
+	}
+	return e, nil
 }
 
 func (e *jobEngine) prepare(cmd *exec.Cmd) error {
@@ -143,6 +161,15 @@ func (e *jobEngine) prepare(cmd *exec.Cmd) error {
 	// до того, как успеет запустить кого-то ещё.
 	cmd.SysProcAttr.CreationFlags |= windows.CREATE_SUSPENDED
 	return nil
+}
+
+// start: при изоляции процесс создаётся в AppContainer, иначе — exec.Cmd.
+func (e *jobEngine) start(cmd *exec.Cmd) (*os.Process, bool, error) {
+	if !e.iz.On() {
+		return nil, false, nil
+	}
+	p, err := startInAppContainer(cmd, e.sid, e.iz, e.dir, e.tmp)
+	return p, true, err
 }
 
 func (e *jobEngine) started(p *os.Process) error {
