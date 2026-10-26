@@ -64,6 +64,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # То же, что сделает Release после слияния: какой тег выйдет и с какими заметками.
+      - name: следующий релиз (предпросмотр)
+        run: |
+          tag=$(go run ./tools/reliz next)
+          if [ -z "$tag" ]; then
+            echo "После слияния релиз не выйдет: нет feat, fix, perf и ломающих изменений." >> "$GITHUB_STEP_SUMMARY"
+          else
+            { echo "## После слияния выйдет $tag"; echo; go run ./tools/reliz notes --tag "$tag"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: goreleaser check
         uses: goreleaser/goreleaser-action@v7
         with:
